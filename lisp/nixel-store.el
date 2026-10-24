@@ -115,7 +115,12 @@ KIND is `text' with DATA (CONTENTS . REFERENCES), or `source' with DATA
     (string-to-unibyte out)))
 
 (defun nixel-store--base64-decode (s)
-  (condition-case nil (base64-decode-string s) (error nil)))
+  "Decode the base-64 string S as Nix does: padding may be missing, and
+anything after the padding is ignored."
+  (let* ((eq (string-search "=" s))
+         (body (if eq (substring s 0 eq) s))
+         (padded (concat body (make-string (% (- 4 (% (length body) 4)) 4) ?=))))
+    (condition-case nil (base64-decode-string padded) (error nil))))
 
 (defun nixel-store-parse-hash (s algo)
   "Parse the hash string S of ALGO (nil when S names it).

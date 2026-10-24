@@ -40,7 +40,7 @@
 
 (defun nixel-fail (fmt &rest args)
   "Signal a Nix evaluation error with the message FMT and ARGS."
-  (signal 'nixel-eval-error (list (apply #'format-message fmt args))))
+  (signal 'nixel-eval-error (list (apply #'format fmt args))))
 
 ;;;; Thunks
 
@@ -103,6 +103,10 @@ data in FORMS."
                        (nixel--restore-forcing ,saved)
                        (let ((,(nth 1 h) nixel--err)) ,@(nthcdr 2 h))))
                    handlers)))))
+
+(defun nixel--run (fn)
+  "Call FN.  Compiled code uses this to keep a closure out of line."
+  (funcall fn))
 
 ;;;; Records
 

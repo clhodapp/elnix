@@ -112,17 +112,45 @@
     (expand-file-name (concat (substring key 0 2) "/" (substring key 2))
                       nixel-cache-dir)))
 
+(defun nixel--compile-to-cache (file stem)
+  "Compile the Nix FILE to STEM.elc.
+Several processes may compile the same file at once, so each writes
+under a name of its own and renames the result into place."
+  (let* ((tmp (format "%s.%d" stem (emacs-pid)))
+         (el (concat tmp ".el")))
+    (unwind-protect
+        (progn
+          (nixel--write-module (nixel-compile-file-form file) el)
+          (nixel--byte-compile-file el)
+          (rename-file (concat tmp ".elc") (concat stem ".elc") t))
+      (when (file-exists-p el) (delete-file el)))))
+
+(defun nixel-compile-tree (dir &optional shard)
+  "Compile every Nix file under DIR into the module cache.
+SHARD (K . N) compiles only every Nth file, starting with the Kth, so
+that N processes can share the work.  Return the number of failures."
+  (let ((files (sort (directory-files-recursively dir "\\.nix\\'") #'string<))
+        (i 0) (failures 0))
+    (dolist (f files)
+      (when (or (null shard) (= (% i (cdr shard)) (car shard)))
+        (condition-case err
+            (let ((stem (nixel--module-cache-file f)))
+              (unless (file-exists-p (concat stem ".elc"))
+                (nixel--compile-to-cache f stem)))
+          (error
+           (setq failures (1+ failures))
+           (message "nixel: %s: %s" f (error-message-string err)))))
+      (setq i (1+ i)))
+    failures))
+
 (defun nixel-load-module (file)
   "The module function of the Nix FILE, compiling it when needed."
   (if (not nixel-byte-compile)
       (eval (nixel-compile-file-form file) t)
     (let* ((stem (nixel--module-cache-file file))
-           (el (concat stem ".el"))
            (elc (concat stem ".elc")))
       (unless (file-exists-p elc)
-        (nixel--write-module (nixel-compile-file-form file) el)
-        (nixel--byte-compile-file el)
-        (delete-file el))
+        (nixel--compile-to-cache file stem))
       (let ((nixel--loaded-module nil)
             (load-force-doc-strings nil))
         (load elc nil t t)

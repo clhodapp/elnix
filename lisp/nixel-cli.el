@@ -159,6 +159,79 @@
                (nixel-cli--out
                 (concat (nixel-force-string-text (nixel--attr x 'drvPath)) "\n"))))))))))
 
+;;;; drv-paths: the jobs of a set, as nix-eval-jobs walks it
+
+(defun nixel-cli--json-line (alist)
+  (concat "{"
+          (mapconcat (lambda (e) (concat (nixel-json-quote (car e)) ":" (cdr e)))
+                     alist ",")
+          "}\n"))
+
+(defun nixel-cli--error-text (err)
+  (nixel--unibyte
+   (if (memq (car err) '(nixel-eval-error nixel-throw nixel-assertion nixel-abort
+                                          nixel-infinite-recursion nixel-parse-error))
+       (format "%s" (cadr err))
+     (format "%S" err))))
+
+(defun nixel-cli--walk-jobs (v path emit)
+  "Report the derivations under V at the attribute PATH through EMIT.
+Like nix-eval-jobs: a derivation is a job; a set below the top that has
+recurseForDerivations = true is walked; anything else is skipped.  An
+error stops only the attribute it happens in."
+  (nixel--catching
+   ((error err (funcall emit path (list (cons "error" (nixel-json-quote
+                                                       (nixel-cli--error-text err)))))))
+   (let ((x (nixel-force v)))
+     (when (nixel--attrs-p x)
+       (cond
+        ((nixel--is-derivation x)
+         (let ((drv (nixel-force-string-text (nixel--attr x 'drvPath))))
+           (funcall emit path (list (cons "drvPath" (nixel-json-quote drv))))))
+        ((or (null path)
+             (let ((r (nixel--attr x 'recurseForDerivations)))
+               (and (not (eq r 'nixel--missing)) (eq (nixel-force r) t))))
+         (let ((keys (append (nixel-attr-keys x) nil)))
+           (dolist (k keys)
+             (unless (eq k 'recurseForDerivations)
+               (nixel-cli--walk-jobs (nixel--attr x k) (append path (list (symbol-name k)))
+                                     emit))))))))))
+
+(defun nixel-cli--drv-paths (args)
+  "nixel drv-paths [--shard K/N] [--system S] -E EXPR | FILE"
+  (let ((shard nil) (expr nil) (file nil))
+    (setq nixel-impure t)
+    (while args
+      (let ((a (pop args)))
+        (pcase a
+          ("--shard" (let ((s (split-string (pop args) "/")))
+                       (setq shard (cons (string-to-number (car s))
+                                         (string-to-number (cadr s))))))
+          ("--system" (setq nixel-current-system (pop args)))
+          ("--pure-eval" (setq nixel-impure nil))
+          ((or "-E" "--expr") (setq expr (pop args)))
+          (_ (setq file a)))))
+    (nixel-reset-builtins-cache)
+    (let* ((root (nixel-force (if expr (nixel-eval-string expr default-directory "«string»")
+                                (nixel-eval-file file))))
+           (keys (append (nixel-attr-keys root) nil))
+           (i 0))
+      (dolist (k keys)
+        (when (or (null shard) (= (% i (cdr shard)) (car shard)))
+          (let ((start (float-time)))
+            (nixel-cli--walk-jobs
+             (nixel--attr root k) (list (symbol-name k))
+             (lambda (path fields)
+               (nixel-cli--out
+                (nixel-cli--json-line
+                 (append
+                  (list (cons "attr" (nixel-json-quote (mapconcat #'identity path "."))))
+                  fields
+                  ;; Milliseconds since the top-level attribute began.
+                  (list (cons "ms" (number-to-string
+                                    (round (* 1000 (- (float-time) start)))))))))))))
+        (setq i (1+ i))))))
+
 (defun nixel-cli--compile (args)
   (let ((form (nixel-compile-file-form (expand-file-name (car args))))
         (print-escape-newlines t))
@@ -177,6 +250,14 @@
                    ("eval" (nixel-cli--eval (cdr args) 'eval))
                    ("drv-path" (nixel-cli--eval (cdr args) 'drv-path))
                    ("compile" (nixel-cli--compile (cdr args)))
+                   ("drv-paths" (nixel-cli--drv-paths (cdr args)))
+                   ;; nixel compile-tree DIR [K/N]
+                   ("compile-tree"
+                    (let ((shard (and (nth 2 args)
+                                      (let ((s (split-string (nth 2 args) "/")))
+                                        (cons (string-to-number (car s))
+                                              (string-to-number (cadr s)))))))
+                      (nixel-compile-tree (expand-file-name (nth 1 args)) shard)))
                    ;; Parse and resolve scope without evaluating.
                    ("check" (nixel-compile-file-form (expand-file-name (cadr args))))
                    (_ (nixel-cli--err "usage: nixel eval|drv-path|compile ...\n")

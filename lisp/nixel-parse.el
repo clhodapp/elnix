@@ -160,15 +160,27 @@ LINE-STARTS defaults to the table of the parse in progress."
       (when (looking-at " *\n")
         (goto-char (match-end 0)))
       (vector 'indent-start "''" beg (point)))
+     ((not (or (and (>= c ?a) (<= c ?z)) (and (>= c ?A) (<= c ?Z))
+               (and (>= c ?0) (<= c ?9))
+               (memq c '(?_ ?. ?/ ?~ ?< ?- ?+))))
+      ;; No literal starts with this character: an operator.
+      (nixel-parse--scan-op beg c))
      (t
       ;; Tokens that start with an identifier, number, path or URI
       ;; character compete on length, as the flex scanner decides.
-      (let ((best nil) (best-len 0))
-        (dolist (cand `((id . ,nixel-parse--re-id)
-                        (int . ,nixel-parse--re-int)
-                        (float . ,nixel-parse--re-float)
-                        (uri . ,nixel-parse--re-uri)
-                        (spath . ,nixel-parse--re-spath)))
+      ;; Only the classes that can start with C are tried.
+      (let ((best nil) (best-len 0)
+            (letter (or (and (>= c ?a) (<= c ?z)) (and (>= c ?A) (<= c ?Z))))
+            (digit (and (>= c ?0) (<= c ?9))))
+        (dolist (cand (cond
+                       (letter `((id . ,nixel-parse--re-id)
+                                 (uri . ,nixel-parse--re-uri)))
+                       ((eq c ?_) `((id . ,nixel-parse--re-id)))
+                       (digit `((int . ,nixel-parse--re-int)
+                                (float . ,nixel-parse--re-float)))
+                       ((eq c ?.) `((float . ,nixel-parse--re-float)))
+                       ((eq c ?<) `((spath . ,nixel-parse--re-spath)))
+                       (t nil)))
           (let ((len (nixel-parse--match-len (cdr cand))))
             (when (> len best-len)
               (setq best (car cand) best-len len))))
@@ -198,18 +210,27 @@ LINE-STARTS defaults to the table of the parse in progress."
             (if (and (eq best 'id) (member text nixel-parse--keywords))
                 (vector 'keyword text beg (point))
               (vector best text beg (point)))))
-         (t
-          (let ((op (cl-find-if
-                     (lambda (o)
-                       (let ((end (+ beg (length o))))
-                         (and (<= end (point-max))
-                              (string= o (buffer-substring-no-properties
-                                          beg end)))))
-                     nixel-parse--operators)))
-            (unless op
-              (nixel-parse--fail beg "unexpected character '%c'" c))
-            (forward-char (length op))
-            (vector 'op op beg (point))))))))))
+         (t (nixel-parse--scan-op beg c))))))))
+
+(defconst nixel-parse--two-char-ops
+  '("==" "!=" "<=" ">=" "&&" "||" "->" "//" "++" "${" "|>" "<|"))
+
+(defconst nixel-parse--one-char-ops ".;,(){}[]=:?!-+*/<>@")
+
+(defun nixel-parse--scan-op (beg c)
+  "Scan the operator that starts with C at BEG."
+  (let ((d (char-after (1+ beg))))
+    (cond
+     ((and (eq c ?.) (eq d ?.) (eq (char-after (+ 2 beg)) ?.))
+      (forward-char 3)
+      (vector 'op "..." beg (point)))
+     ((and d (member (string c d) nixel-parse--two-char-ops))
+      (forward-char 2)
+      (vector 'op (string c d) beg (point)))
+     ((string-search (string c) nixel-parse--one-char-ops)
+      (forward-char 1)
+      (vector 'op (string c) beg (point)))
+     (t (nixel-parse--fail beg "unexpected character '%c'" c)))))
 
 (defsubst nixel-parse--peek ()
   "Return the lookahead token, scanning it if necessary."
@@ -826,14 +847,21 @@ before it; only spaces count; a final line of only spaces is dropped."
 ;; literal set; naming an attribute twice otherwise is an error.
 ;; Dynamic names keep their order after the static ones.
 ;;
-;; A merger is (STATICS . DYNAMICS): STATICS is a list, newest first,
-;; of entries [NAME BINDING NESTED RECURSIVE], DYNAMICS a list of
-;; bindings, newest first.
+;; A merger is [TABLE STATICS DYNAMICS]: TABLE maps a name to its entry
+;; [NAME BINDING NESTED RECURSIVE], STATICS lists the entries newest
+;; first, and DYNAMICS the dynamic bindings, newest first.  The table
+;; keeps a set of many thousand bindings, such as the Haskell package
+;; set, from costing a scan per name.
 
-(defun nixel-parse--merger () (cons nil nil))
+(defun nixel-parse--merger ()
+  (vector (make-hash-table :test 'equal) nil nil))
 
 (defun nixel-parse--merger-find (m name)
-  (cl-find name (car m) :key (lambda (e) (aref e 0)) :test #'string=))
+  (gethash name (aref m 0)))
+
+(defun nixel-parse--merger-push (m entry)
+  (puthash (aref entry 0) entry (aref m 0))
+  (aset m 1 (cons entry (aref m 1))))
 
 (defun nixel-parse--wrap-path (path value)
   "Nest VALUE in single-attribute sets along PATH."
@@ -854,7 +882,8 @@ before it; only spaces count; a final line of only spaces is dropped."
   (let ((head (car path))
         (rest (cdr path)))
     (if (eq (car head) 'dynamic)
-        (push (list head (nixel-parse--wrap-path rest value) kind) (cdr m))
+        (aset m 2 (cons (list head (nixel-parse--wrap-path rest value) kind)
+                        (aref m 2)))
       (let* ((name (nth 2 head))
              (existing (nixel-parse--merger-find m name)))
         (cond
@@ -869,18 +898,18 @@ before it; only spaces count; a final line of only spaces is dropped."
               (nixel-parse--fail (nth 1 head) "attribute '%s' already defined"
                                  name)))
           (when value
-            (push (vector name (list head value kind)
-                          (and (eq (car value) 'attrs) (null kind)
-                               (nixel-parse--merger-from-attrs value))
-                          (and (eq (car value) 'attrs) (nth 2 value)))
-                  (car m))))
+            (nixel-parse--merger-push
+             m (vector name (list head value kind)
+                       (and (eq (car value) 'attrs) (null kind)
+                            (nixel-parse--merger-from-attrs value))
+                       (and (eq (car value) 'attrs) (nth 2 value))))))
          ((null existing)
           (let ((nested (nixel-parse--merger)))
             (nixel-parse--merger-add nested rest value kind)
-            (push (vector name
-                          (list head (list 'attrs (nth 1 head) nil nil) nil)
-                          nested nil)
-                  (car m))))
+            (nixel-parse--merger-push
+             m (vector name
+                       (list head (list 'attrs (nth 1 head) nil nil) nil)
+                       nested nil))))
          ((null (aref existing 2))
           (nixel-parse--fail (nth 1 head) "attribute '%s' already defined"
                              name))
@@ -889,7 +918,7 @@ before it; only spaces count; a final line of only spaces is dropped."
 (defun nixel-parse--merger-finish (m)
   "The bindings collected by merger M."
   (let ((out nil))
-    (dolist (e (reverse (car m)))
+    (dolist (e (reverse (aref m 1)))
       (let ((binding (aref e 1))
             (nested (aref e 2)))
         (if (null nested)
@@ -903,7 +932,7 @@ before it; only spaces count; a final line of only spaces is dropped."
                               (nixel-parse--merger-finish nested))
                         (nth 2 binding))
                   out)))))
-    (nconc (nreverse out) (reverse (cdr m)))))
+    (nconc (nreverse out) (reverse (aref m 2)))))
 
 (defun nixel-parse--bindings (until)
   "Parse bindings up to the closing UNTIL, `}' or `in'."

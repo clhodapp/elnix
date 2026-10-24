@@ -495,8 +495,27 @@ assignably even when no value refers to another."
         `(let ,(nreverse outer-temps)
            (let ,(append (mapcar #'car froms) (mapcar #'car assigns))
              ,@(mapcar (lambda (f) `(setq ,@f)) froms)
-             ,@(mapcar (lambda (a) `(setq ,@a)) assigns)
+             ,@(nixel-compile--chunked (mapcar (lambda (a) `(setq ,@a)) assigns))
              ,body))))))
+
+(defconst nixel-compile--chunk-size 200
+  "The most forms of a set construction compiled into one function.")
+
+(defun nixel-compile--chunked (forms)
+  "FORMS, split into closures of at most `nixel-compile--chunk-size' forms.
+One byte-compiled function holds at most 65536 constants, and the byte
+compiler slows down on very large functions, so a set of thousands of
+attributes is built by a series of closures, each with constants of its
+own.  `nixel--run' is an ordinary function, which keeps the byte
+optimiser from inlining the closures back."
+  (if (<= (length forms) nixel-compile--chunk-size)
+      forms
+    (let ((out nil))
+      (while forms
+        (let ((chunk (cl-subseq forms 0 (min nixel-compile--chunk-size (length forms)))))
+          (setq forms (nthcdr nixel-compile--chunk-size forms))
+          (push `(nixel--run (lambda () ,@chunk)) out)))
+      (nreverse out))))
 
 (defun nixel-compile--build-attrs (pos-table values dynamic value-form-fn)
   "A form building an attribute set.
@@ -505,10 +524,11 @@ gives its lazy value.  DYNAMIC are (NAME-FORM FORM)."
   (let ((tbl (nixel-compile--gensym "t")))
     `(let ((,tbl (make-hash-table :test 'eq :size ,(+ (length values)
                                                       (length dynamic)))))
-       ,@(mapcar (lambda (v)
-                   `(puthash ,(nixel-compile--sym-form (car v))
-                             ,(funcall value-form-fn v) ,tbl))
-                 values)
+       ,@(nixel-compile--chunked
+          (mapcar (lambda (v)
+                    `(puthash ,(nixel-compile--sym-form (car v))
+                              ,(funcall value-form-fn v) ,tbl))
+                  values))
        ,@(mapcar (lambda (d) `(nixel--put-dynamic ,tbl ,(car d) ,(nth 1 d)))
                  dynamic)
        (nixel--mkattrs ,tbl ,pos-table))))

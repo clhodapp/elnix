@@ -224,7 +224,11 @@ data in FORMS."
     (cond
      ((null nonempty) nil)
      ((null (cdr nonempty)) (car nonempty))
-     (t (delete-dups (apply #'append nonempty))))))
+     ;; A context list belongs to the string value that holds it, and
+     ;; values share them, so the union is built from copies:
+     ;; `delete-dups' edits its argument, and `append' would leave the
+     ;; last list in the result uncopied.
+     (t (delete-dups (apply #'append (append nonempty (list nil))))))))
 
 (defun elnix-force-string (v)
   "Force V to a string value, keeping its context."

@@ -187,7 +187,9 @@ error stops only the attribute it happens in."
   (elnix--catching
    ((error err (funcall emit path (list (cons "error" (elnix-json-quote
                                                        (elnix-cli--error-text err)))))))
-   (let ((x (elnix-force v)))
+   ;; nix-eval-jobs calls every function it meets with no arguments,
+   ;; as nix-instantiate's autoCallFunction does, and walks the result.
+   (let ((x (elnix-cli--auto-call v nil)))
      (when (elnix--attrs-p x)
        (cond
         ((elnix--is-derivation x)
@@ -199,9 +201,25 @@ error stops only the attribute it happens in."
          (let ((keys (append (elnix-attr-keys x) nil)))
            (dolist (k keys)
              (let ((child (append path (list (symbol-name k)))))
+               ;; Ownership is decided at the children of a split set;
+               ;; everything below a child belongs to its owner.
                (unless (or (eq k 'recurseForDerivations)
-                           (and elnix-cli--owns (not (funcall elnix-cli--owns child))))
+                           (and elnix-cli--owns (= (length child) 2)
+                                (not (funcall elnix-cli--owns child))))
                  (elnix-cli--walk-jobs (elnix--attr x k) child emit)))))))))))
+
+(defun elnix-cli--path-hash (text m)
+  "A number below M chosen by the MD5 of TEXT, stable across processes."
+  (% (string-to-number (substring (secure-hash 'md5 text) 0 7) 16) m))
+
+(defun elnix-cli--rss ()
+  "The resident memory of this process in kB, or 0 where /proc is missing."
+  (if (not (file-readable-p "/proc/self/statm"))
+      0
+    (with-temp-buffer
+      (insert-file-contents "/proc/self/statm")
+      ;; The second field counts resident pages of 4 kB.
+      (* 4 (string-to-number (cadr (split-string (buffer-string))))))))
 
 (defun elnix-cli--attr-path-text (path)
   "PATH joined with dots, a component quoted as nix-eval-jobs quotes it."
@@ -211,7 +229,7 @@ error stops only the attribute it happens in."
   "elnix drv-paths [--shard K/N] [--split NAME,...] [--system S] -E EXPR | FILE
 With --split, every shard walks the named top-level sets and evaluates
 only the children whose attribute path hashes to it."
-  (let ((shard nil) (expr nil) (file nil) (split nil))
+  (let ((shard nil) (expr nil) (file nil) (split nil) (sub nil))
     (setq elnix-impure t)
     (while args
       (let ((a (pop args)))
@@ -221,6 +239,11 @@ only the children whose attribute path hashes to it."
                                          (string-to-number (cadr s))))))
           ("--system" (setq elnix-current-system (pop args)))
           ("--split" (setq split (split-string (pop args) "," t)))
+          ;; --sub J/M: of the jobs the shard owns, only those whose
+          ;; path hashes to J modulo M, so one shard can be rerun in parts.
+          ("--sub" (let ((s (split-string (pop args) "/")))
+                     (setq sub (cons (string-to-number (car s))
+                                     (string-to-number (cadr s))))))
           ("--pure-eval" (setq elnix-impure nil))
           ((or "-E" "--expr") (setq expr (pop args)))
           (_ (setq file a)))))
@@ -231,16 +254,21 @@ only the children whose attribute path hashes to it."
            (i 0))
       (dolist (k keys)
         (let* ((splitting (and shard (member (symbol-name k) split)))
+               (in-sub (lambda (path)
+                         (or (null sub)
+                             (= (elnix-cli--path-hash (concat "sub:" (mapconcat #'identity path "."))
+                                                      (cdr sub))
+                                (car sub)))))
                (elnix-cli--owns
                 (and splitting
                      (lambda (child)
-                       (= (% (string-to-number
-                              (substring (secure-hash 'md5 (mapconcat #'identity child "."))
-                                         0 7)
-                              16)
-                             (cdr shard))
-                          (car shard))))))
-        (when (or (null shard) splitting (= (% i (cdr shard)) (car shard)))
+                       (and (= (elnix-cli--path-hash (mapconcat #'identity child ".") (cdr shard))
+                               (car shard))
+                            (funcall in-sub child))))))
+        (when (or (null shard)
+                  splitting
+                  (and (= (% i (cdr shard)) (car shard))
+                       (funcall in-sub (list (symbol-name k)))))
           (let ((start (float-time)))
             (elnix-cli--walk-jobs
              (elnix--attr root k) (list (symbol-name k))
@@ -250,9 +278,11 @@ only the children whose attribute path hashes to it."
                  (append
                   (list (cons "attr" (elnix-json-quote (elnix-cli--attr-path-text path))))
                   fields
-                  ;; Milliseconds since the top-level attribute began.
+                  ;; Milliseconds since the top-level attribute began,
+                  ;; and the resident memory of the process in kB.
                   (list (cons "ms" (number-to-string
-                                    (round (* 1000 (- (float-time) start))))))))))))))
+                                    (round (* 1000 (- (float-time) start)))))
+                        (cons "rss" (number-to-string (elnix-cli--rss))))))))))))
         (setq i (1+ i))))
     ;; The peak resident memory of this process, for sizing shards.
     (when (file-readable-p "/proc/self/status")

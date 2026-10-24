@@ -155,6 +155,9 @@ that N processes can share the work.  Return the number of failures."
       (setq i (1+ i)))
     failures))
 
+(defvar elnix--warned-uncached nil
+  "Non-nil once the warning about an unwritable module cache was printed.")
+
 (defun elnix-load-module (file)
   "The module function of the Nix FILE, compiling it when needed."
   (if (not elnix-byte-compile)
@@ -168,8 +171,14 @@ that N processes can share the work.  Return the number of failures."
           ;; module is compiled in memory instead.
           (file-error nil)))
       (if (not (file-exists-p elc))
-          (let ((byte-compile-warnings nil) (inhibit-message t))
-            (byte-compile (elnix-compile-file-form file)))
+          (progn
+            (unless elnix--warned-uncached
+              (setq elnix--warned-uncached t)
+              (princ (format "elnix: cannot write the module cache %s; compiling in memory, which is slow\n"
+                             elnix-cache-dir)
+                     #'external-debugging-output))
+            (let ((byte-compile-warnings nil) (inhibit-message t))
+              (byte-compile (elnix-compile-file-form file))))
         (let ((elnix--loaded-module nil)
               (load-force-doc-strings nil))
           (load elc nil t t)

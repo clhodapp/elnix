@@ -319,7 +319,7 @@ Return (TEXT . STOP) where STOP is `interp' or `end'."
               (forward-char 2)
               (when (eq (char-after) ?\n) (forward-char 1)))
              (t
-              (push (string (elnix-parse--unescape e)) out)
+              (push (unibyte-string (elnix-parse--unescape e)) out)
               (forward-char 2)))))
          ((eq c ?\r)
           (push "\n" out)
@@ -362,7 +362,7 @@ segment is one Nix's indentation stripping treats like an interpolation."
                   (forward-char 4)
                   (when (eq (char-after) ?\n) (forward-char 1)))
                  (t
-                  (push (cons (string (elnix-parse--unescape f)) t) segs)
+                  (push (cons (unibyte-string (elnix-parse--unescape f)) t) segs)
                   (forward-char 4)))))
              (t (forward-char 2) (setq stop 'end)))))
          ((and (eq c ?$) (eq d ?{))

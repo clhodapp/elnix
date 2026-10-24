@@ -240,7 +240,7 @@ error stops only the attribute it happens in."
 (defun elnix-cli-main ()
   "The entry point of bin/elnix; reads `command-line-args-left'."
   (let ((args command-line-args-left)
-        (gc-cons-threshold (* 1024 1024 1024))
+        (gc-cons-threshold (* 64 1024 1024))
         (max-lisp-eval-depth 1000000))
     (setq command-line-args-left nil)
     (let ((code

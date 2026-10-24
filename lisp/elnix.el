@@ -105,7 +105,7 @@ evaluation spends its time in.")
 
 (defun elnix--byte-compile-file (el-file)
   (let ((byte-compile-warnings nil)
-        (gc-cons-threshold (* 1024 1024 1024))
+        (gc-cons-threshold (* 128 1024 1024))
         (byte-optimize (and (< (file-attribute-size (file-attributes el-file))
                                elnix-optimize-limit)
                             byte-optimize))

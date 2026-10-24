@@ -45,19 +45,21 @@
 
 (defun elnix-derivation--quote (s)
   "S as an ATerm string literal."
-  (let ((out (list "\"")))
-    (dotimes (i (length s))
-      (let ((c (aref s i)))
-        (push (pcase c
-                (?\" "\\\"")
-                (?\\ "\\\\")
-                (?\n "\\n")
-                (?\r "\\r")
-                (?\t "\\t")
-                (_ (string c)))
-              out)))
+  ;; S is unibyte; copying runs with `substring' keeps every byte as it
+  ;; is, where `string' would read a byte above 127 as a Latin-1
+  ;; character and encode it again.
+  (let* ((s (elnix--unibyte s))
+         (out (list "\"")) (start 0) (n (length s)))
+    (dotimes (i n)
+      (let ((esc (pcase (aref s i)
+                   (?\" "\\\"") (?\\ "\\\\") (?\n "\\n") (?\r "\\r") (?\t "\\t"))))
+        (when esc
+          (when (> i start) (push (substring s start i) out))
+          (push esc out)
+          (setq start (1+ i)))))
+    (when (< start n) (push (substring s start) out))
     (push "\"" out)
-    (elnix--unibyte (apply #'concat (nreverse out)))))
+    (apply #'concat (nreverse out))))
 
 (defun elnix-derivation--list (items)
   (concat "[" (mapconcat #'identity items ",") "]"))
@@ -211,7 +213,9 @@ sorted."
                             (push (elnix--sctx s) ctxs)
                             (push (elnix--sval s) args)))
                         (elnix-force-list v)))
-                 ((string= kname "__structuredAttrs"))
+                 ;; Only a true __structuredAttrs stays out of the
+                 ;; environment; false is coerced like any attribute.
+                 ((and (string= kname "__structuredAttrs") structured))
                  (structured
                   (let ((j (elnix-to-json-with-context v)))
                     (push (elnix--sctx j) ctxs)

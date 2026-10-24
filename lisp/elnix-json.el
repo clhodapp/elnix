@@ -218,7 +218,11 @@ Return (DIGITS . EXPONENT) with X = 0.DIGITS * 10^EXPONENT."
                           (elnix-json--utf8 cp)))
                     (_ (elnix-json--fail "invalid escape")))
                   out))))))
-    (apply #'concat (nreverse out))))
+    (let ((s (apply #'concat (nreverse out))))
+      ;; A Nix string cannot hold a null byte.
+      (when (string-search "\0" s)
+        (elnix-json--fail "string contains a null byte"))
+      s)))
 
 (defun elnix-json--number ()
   (let ((start elnix-json--i))

@@ -130,8 +130,9 @@ LINE-STARTS defaults to the table of the parse in progress."
     (while (not done)
       (skip-chars-forward " \t\r\n")
       (cond
+       ;; A line comment ends at a carriage return too, as in lexer.l.
        ((eq (char-after) ?#)
-        (skip-chars-forward "^\n"))
+        (skip-chars-forward "^\r\n"))
        ((and (eq (char-after) ?/) (eq (char-after (1+ (point))) ?*))
         (let ((start (point)))
           (forward-char 2)
@@ -331,7 +332,10 @@ Return (TEXT . STOP) where STOP is `interp' or `end'."
              ;; `$$' is two literal dollars; it is how `$${' is written.
              ((eq d ?$) (push "$$" out) (forward-char 2))
              (t (push "$" out) (forward-char 1))))))))
-    (cons (apply #'concat (nreverse out)) stop)))
+    (let ((text (apply #'concat (nreverse out))))
+      (when (string-search "\0" text)
+        (elnix-parse--fail (point) "input string contains a null byte"))
+      (cons text stop))))
 
 (defun elnix-parse--scan-indented ()
   "Scan the text of an indented string up to `${' or the closing quotes.
@@ -372,6 +376,8 @@ segment is one Nix's indentation stripping treats like an interpolation."
          (t
           (push (cons (string c) t) segs)
           (forward-char 1)))))
+    (when (cl-some (lambda (s) (string-search "\0" (car s))) segs)
+      (elnix-parse--fail (point) "input string contains a null byte"))
     (cons (nreverse segs) stop)))
 
 (defun elnix-parse--scan-path (first)
@@ -410,6 +416,7 @@ Return (TEXT . STOP)."
          (elnix-parse--next)
          (elnix-parse--expect-op "{")
          (let ((formals (elnix-parse--formals)))
+           (elnix-parse--check-at-name (aref tok 1) formals (aref tok 2))
            (elnix-parse--expect-op ":")
            (list 'lambda (aref tok 2) (aref tok 1) formals
                  (elnix-parse--expr))))
@@ -423,7 +430,8 @@ Return (TEXT . STOP)."
                    (param nil))
                (when (elnix-parse--op-p "@")
                  (elnix-parse--next)
-                 (setq param (aref (elnix-parse--expect-id) 1)))
+                 (setq param (aref (elnix-parse--expect-id) 1))
+                 (elnix-parse--check-at-name param formals (aref tok 2)))
                (elnix-parse--expect-op ":")
                (list 'lambda (aref tok 2) param formals (elnix-parse--expr))))
          (elnix-parse--binary 0)))
@@ -464,6 +472,11 @@ Return (TEXT . STOP)."
               (list 'if (aref tok 2) c then (elnix-parse--expr)))))
          (_ (elnix-parse--binary 0))))
       (_ (elnix-parse--binary 0)))))
+
+(defun elnix-parse--check-at-name (name formals pos)
+  "Fail when the @ NAME of a lambda at POS is also one of its FORMALS."
+  (when (assoc name (car formals))
+    (elnix-parse--fail pos "duplicate formal function argument '%s'" name)))
 
 (defun elnix-parse--formals-ahead-p ()
   "With `{' as the lookahead, whether the braces open lambda formals.
@@ -603,7 +616,11 @@ an identifier followed by `,', `?' or `}'."
 (defun elnix-parse--select-rest (subject)
   "Parse a selection `.a.b or d' from SUBJECT, if one follows."
   (if (not (elnix-parse--op-p "."))
-      subject
+      (if (elnix-parse--keyword-p "or")
+          ;; parser.y: `e or' is e applied to the variable or.
+          (let ((tok (elnix-parse--next)))
+            (list 'call (nth 1 subject) subject (list 'var (aref tok 2) "or")))
+        subject)
     (let* ((tok (elnix-parse--next))
            (path (elnix-parse--attrpath)))
       (if (elnix-parse--keyword-p "or")
@@ -664,7 +681,15 @@ an identifier followed by `,', `?' or `}'."
          (when (> n 9223372036854775807)
            (elnix-parse--fail pos "invalid integer '%s'" (aref tok 1)))
          (list 'int pos n)))
-      ('float (list 'float pos (float (string-to-number (aref tok 1)))))
+      ('float
+       ;; lexer.l rejects a literal strtod reports out of range: one
+       ;; that overflows, or a nonzero one that is subnormal or zero.
+       (let ((f (float (string-to-number (aref tok 1)))))
+         (when (or (= (abs f) 1.0e+INF)
+                   (and (< (abs f) 2.2250738585072014e-308)
+                        (string-match-p "[1-9]" (car (split-string (aref tok 1) "[eE]")))))
+           (elnix-parse--fail pos "invalid float '%s'" (aref tok 1)))
+         (list 'float pos f)))
       ('uri (list 'str pos (list (aref tok 1))))
       ('spath (list 'path pos 'search
                     (list (substring (aref tok 1) 1 -1))))

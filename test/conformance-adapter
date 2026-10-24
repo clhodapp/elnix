@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
+#
+# The nix-conformance adapter for nixel (github:numtide/nix-conformance).
+# Exit 3 tells the runner that nixel does not implement an operation.
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+op=$1 file=$2
+shift 2
+case $op in
+  eval) exec "$here/bin/nixel" eval --strict "$@" "$file" ;;
+  eval-xml) exec "$here/bin/nixel" eval --strict --xml --no-location "$@" "$file" ;;
+  check) exec "$here/bin/nixel" check "$file" ;;
+  *) exit 3 ;;
+esac

@@ -174,6 +174,11 @@
        (format "%s" (cadr err))
      (format "%S" err))))
 
+(defvar elnix-cli--owns nil
+  "A function of a child attribute path, or nil.
+While a split set is walked, a child of it is evaluated only when this
+returns non-nil, so that the shards share the children of a large set.")
+
 (defun elnix-cli--walk-jobs (v path emit)
   "Report the derivations under V at the attribute PATH through EMIT.
 Like nix-eval-jobs: a derivation is a job; a set below the top that has
@@ -193,13 +198,20 @@ error stops only the attribute it happens in."
                (and (not (eq r 'elnix--missing)) (eq (elnix-force r) t))))
          (let ((keys (append (elnix-attr-keys x) nil)))
            (dolist (k keys)
-             (unless (eq k 'recurseForDerivations)
-               (elnix-cli--walk-jobs (elnix--attr x k) (append path (list (symbol-name k)))
-                                     emit))))))))))
+             (let ((child (append path (list (symbol-name k)))))
+               (unless (or (eq k 'recurseForDerivations)
+                           (and elnix-cli--owns (not (funcall elnix-cli--owns child))))
+                 (elnix-cli--walk-jobs (elnix--attr x k) child emit)))))))))))
+
+(defun elnix-cli--attr-path-text (path)
+  "PATH joined with dots, a component quoted as nix-eval-jobs quotes it."
+  (mapconcat #'elnix-print-attr-name path "."))
 
 (defun elnix-cli--drv-paths (args)
-  "elnix drv-paths [--shard K/N] [--system S] -E EXPR | FILE"
-  (let ((shard nil) (expr nil) (file nil))
+  "elnix drv-paths [--shard K/N] [--split NAME,...] [--system S] -E EXPR | FILE
+With --split, every shard walks the named top-level sets and evaluates
+only the children whose attribute path hashes to it."
+  (let ((shard nil) (expr nil) (file nil) (split nil))
     (setq elnix-impure t)
     (while args
       (let ((a (pop args)))
@@ -208,6 +220,7 @@ error stops only the attribute it happens in."
                        (setq shard (cons (string-to-number (car s))
                                          (string-to-number (cadr s))))))
           ("--system" (setq elnix-current-system (pop args)))
+          ("--split" (setq split (split-string (pop args) "," t)))
           ("--pure-eval" (setq elnix-impure nil))
           ((or "-E" "--expr") (setq expr (pop args)))
           (_ (setq file a)))))
@@ -217,7 +230,17 @@ error stops only the attribute it happens in."
            (keys (append (elnix-attr-keys root) nil))
            (i 0))
       (dolist (k keys)
-        (when (or (null shard) (= (% i (cdr shard)) (car shard)))
+        (let* ((splitting (and shard (member (symbol-name k) split)))
+               (elnix-cli--owns
+                (and splitting
+                     (lambda (child)
+                       (= (% (string-to-number
+                              (substring (secure-hash 'md5 (mapconcat #'identity child "."))
+                                         0 7)
+                              16)
+                             (cdr shard))
+                          (car shard))))))
+        (when (or (null shard) splitting (= (% i (cdr shard)) (car shard)))
           (let ((start (float-time)))
             (elnix-cli--walk-jobs
              (elnix--attr root k) (list (symbol-name k))
@@ -225,11 +248,11 @@ error stops only the attribute it happens in."
                (elnix-cli--out
                 (elnix-cli--json-line
                  (append
-                  (list (cons "attr" (elnix-json-quote (mapconcat #'identity path "."))))
+                  (list (cons "attr" (elnix-json-quote (elnix-cli--attr-path-text path))))
                   fields
                   ;; Milliseconds since the top-level attribute began.
                   (list (cons "ms" (number-to-string
-                                    (round (* 1000 (- (float-time) start)))))))))))))
+                                    (round (* 1000 (- (float-time) start))))))))))))))
         (setq i (1+ i))))
     ;; The peak resident memory of this process, for sizing shards.
     (when (file-readable-p "/proc/self/status")

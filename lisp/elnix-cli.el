@@ -230,7 +230,13 @@ error stops only the attribute it happens in."
                   ;; Milliseconds since the top-level attribute began.
                   (list (cons "ms" (number-to-string
                                     (round (* 1000 (- (float-time) start)))))))))))))
-        (setq i (1+ i))))))
+        (setq i (1+ i))))
+    ;; The peak resident memory of this process, for sizing shards.
+    (when (file-readable-p "/proc/self/status")
+      (with-temp-buffer
+        (insert-file-contents "/proc/self/status")
+        (when (re-search-forward "^VmHWM:\\s-*\\([0-9]+\\)" nil t)
+          (elnix-cli--err (format "elnix: peak memory %s kB\n" (match-string 1))))))))
 
 (defun elnix-cli--compile (args)
   (let ((form (elnix-compile-file-form (expand-file-name (car args))))

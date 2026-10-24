@@ -54,10 +54,10 @@
                 (?\n "\\n")
                 (?\r "\\r")
                 (?\t "\\t")
-                (_ (unibyte-string c)))
+                (_ (string c)))
               out)))
     (push "\"" out)
-    (apply #'concat (nreverse out))))
+    (nixel--unibyte (apply #'concat (nreverse out)))))
 
 (defun nixel-derivation--list (items)
   (concat "[" (mapconcat #'identity items ",") "]"))

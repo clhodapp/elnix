@@ -78,6 +78,16 @@ directly.")
                           (or nixel-compile--file "«string»")
                           (car lc) (cdr lc))))))
 
+(defun nixel-compile--str-const (s)
+  "A form evaluating to the unibyte string S.
+A module file is read back as raw bytes, which turns a string literal
+holding bytes outside ASCII into a multibyte string of raw-byte
+characters, so such a literal is made unibyte again when the module
+loads."
+  (if (string-match-p "\\`[[:ascii:]]*\\'" s)
+      s
+    `(string-to-unibyte ,s)))
+
 (defun nixel-compile--sym-form (name)
   "A form evaluating to the attribute symbol of the string NAME."
   (let ((s (nixel--unibyte name)))
@@ -85,7 +95,7 @@ directly.")
         (list 'quote (intern s))
       ;; A symbol with bytes outside ASCII cannot round-trip through a
       ;; source file, so it is interned when the module loads.
-      `(load-time-value (intern ,s)))))
+      `(intern (string-to-unibyte ,s)))))
 
 (defun nixel-compile--hoist (prefix form)
   "Bind FORM at module level and return the variable that holds it."
@@ -220,9 +230,9 @@ Such an expression needs no thunk in a lazy position."
 (defun nixel-compile--string (parts env)
   (cond
    ((null parts) "")
-   ((cl-every #'stringp parts) (apply #'concat parts))
+   ((cl-every #'stringp parts) (nixel-compile--str-const (apply #'concat parts)))
    (t `(nixel-interp ,@(mapcar (lambda (p)
-                                 (if (stringp p) p
+                                 (if (stringp p) (nixel-compile--str-const p)
                                    (nixel-compile-strict p env)))
                                parts)))))
 

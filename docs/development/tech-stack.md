@@ -74,3 +74,7 @@ in `string-to-unibyte`.
   prints `«repeated»` one level earlier in those cases.
 - `parseFlakeRef`, `flakeRefToString` and BLAKE3 hashes are not
   implemented.
+- `builtins.sort` is a stable merge sort. Nix 2.34 uses peeksort, so a
+  comparator that throws or is inconsistent can see a different
+  sequence of pairs.
+- Evaluation uses about four times the memory of Nix; see testing.md.

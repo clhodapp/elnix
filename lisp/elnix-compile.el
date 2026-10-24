@@ -1,4 +1,4 @@
-;;; nixel-compile.el --- Compile Nix syntax trees to Emacs Lisp -*- lexical-binding: t; -*-
+;;; elnix-compile.el --- Compile Nix syntax trees to Emacs Lisp -*- lexical-binding: t; -*-
 
 ;; SPDX-License-Identifier: MIT
 
@@ -34,51 +34,51 @@
 ;;; Code:
 
 (require 'cl-lib)
-(require 'nixel-parse)
-(require 'nixel-runtime)
+(require 'elnix-parse)
+(require 'elnix-runtime)
 
-(defvar nixel-compile--line-starts nil
+(defvar elnix-compile--line-starts nil
   "The line table of the file being compiled.")
 
-(defvar nixel-compile--hoisted nil
+(defvar elnix-compile--hoisted nil
   "Module-level bindings, newest first: (SYMBOL FORM).
 Path constants and position tables are computed once per module load
 and shared by every evaluation of the expression that names them.")
 
-(defvar nixel-compile--counter 0
+(defvar elnix-compile--counter 0
   "The counter that makes the names of compiler temporaries unique.")
 
-(defvar nixel-compile--file nil
+(defvar elnix-compile--file nil
   "The name of the source file being compiled, for error messages.")
 
-(defvar nixel-compile-builtin-arity nil
+(defvar elnix-compile-builtin-arity nil
   "A function from a builtin name to its arity, or nil.
 Set by the builtins library; nil arity means the builtin is not called
 directly.")
 
-(defvar nixel-compile-global-p nil
+(defvar elnix-compile-global-p nil
   "A function returning non-nil when a name is a global builtin.")
 
-(defun nixel-compile--gensym (prefix)
+(defun elnix-compile--gensym (prefix)
   "A fresh symbol named %PREFIXN."
-  (setq nixel-compile--counter (1+ nixel-compile--counter))
-  (intern (format "%%%s%d" prefix nixel-compile--counter)))
+  (setq elnix-compile--counter (1+ elnix-compile--counter))
+  (intern (format "%%%s%d" prefix elnix-compile--counter)))
 
-(defun nixel-compile--var-sym (name)
+(defun elnix-compile--var-sym (name)
   "The Lisp variable of the Nix variable NAME."
   (intern (concat "$" name)))
 
-(defun nixel-compile--line-col (pos)
-  (nixel-parse-line-col pos nixel-compile--line-starts))
+(defun elnix-compile--line-col (pos)
+  (elnix-parse-line-col pos elnix-compile--line-starts))
 
-(defun nixel-compile--fail (pos fmt &rest args)
-  (let ((lc (nixel-compile--line-col pos)))
-    (signal 'nixel-parse-error
+(defun elnix-compile--fail (pos fmt &rest args)
+  (let ((lc (elnix-compile--line-col pos)))
+    (signal 'elnix-parse-error
             (list (format "%s at %s:%d:%d" (apply #'format fmt args)
-                          (or nixel-compile--file "«string»")
+                          (or elnix-compile--file "«string»")
                           (car lc) (cdr lc))))))
 
-(defun nixel-compile--str-const (s)
+(defun elnix-compile--str-const (s)
   "A form evaluating to the unibyte string S.
 A module file is read back as raw bytes, which turns a string literal
 holding bytes outside ASCII into a multibyte string of raw-byte
@@ -88,24 +88,24 @@ loads."
       s
     `(string-to-unibyte ,s)))
 
-(defun nixel-compile--sym-form (name)
+(defun elnix-compile--sym-form (name)
   "A form evaluating to the attribute symbol of the string NAME."
-  (let ((s (nixel--unibyte name)))
+  (let ((s (elnix--unibyte name)))
     (if (string-match-p "\\`[[:ascii:]]*\\'" s)
         (list 'quote (intern s))
       ;; A symbol with bytes outside ASCII cannot round-trip through a
       ;; source file, so it is interned when the module loads.
       `(intern (string-to-unibyte ,s)))))
 
-(defun nixel-compile--hoist (prefix form)
+(defun elnix-compile--hoist (prefix form)
   "Bind FORM at module level and return the variable that holds it."
-  (let ((sym (nixel-compile--gensym prefix)))
-    (push (list sym form) nixel-compile--hoisted)
+  (let ((sym (elnix-compile--gensym prefix)))
+    (push (list sym form) elnix-compile--hoisted)
     sym))
 
 ;;;; Environments
 
-(defun nixel-compile--lookup (name env)
+(defun elnix-compile--lookup (name env)
   "Resolve the Nix variable NAME in ENV.
 Return (lex SYMBOL), (with SYMBOL) or (global NAME)."
   (let ((found nil) (with nil))
@@ -121,18 +121,18 @@ Return (lex SYMBOL), (with SYMBOL) or (global NAME)."
     ;; too win over a `with'.
     (cond
      (found (list 'lex found))
-     ((and nixel-compile-global-p (funcall nixel-compile-global-p name))
+     ((and elnix-compile-global-p (funcall elnix-compile-global-p name))
       (list 'global name))
      (with (list 'with with))
      (t nil))))
 
-(defun nixel-compile--innermost-with (env)
+(defun elnix-compile--innermost-with (env)
   (cl-loop for fr in env
            when (eq (aref fr 0) 'with) return (aref fr 1)))
 
 ;;;; Expressions
 
-(defun nixel-compile--trivial-p (e env)
+(defun elnix-compile--trivial-p (e env)
   "Whether E compiles to the same form in lazy and strict-free use.
 Such an expression needs no thunk in a lazy position."
   (pcase (car e)
@@ -140,199 +140,199 @@ Such an expression needs no thunk in a lazy position."
     ('str (cl-every #'stringp (nth 2 e)))
     ('lambda t)
     ('list (null (nth 2 e)))
-    ('var (eq (car (nixel-compile--lookup (nth 2 e) env)) 'lex))
+    ('var (eq (car (elnix-compile--lookup (nth 2 e) env)) 'lex))
     (_ nil)))
 
-(defun nixel-compile-lazy (e env)
+(defun elnix-compile-lazy (e env)
   "A form producing the lazy value of E in ENV."
   (pcase (car e)
-    ((or 'int 'float 'lambda) (nixel-compile-strict e env))
+    ((or 'int 'float 'lambda) (elnix-compile-strict e env))
     ('str (if (cl-every #'stringp (nth 2 e))
-              (nixel-compile-strict e env)
-            `(nixel--delay ,(nixel-compile-strict e env))))
+              (elnix-compile-strict e env)
+            `(elnix--delay ,(elnix-compile-strict e env))))
     ('list (if (null (nth 2 e))
                []
-             `(nixel--delay ,(nixel-compile-strict e env))))
+             `(elnix--delay ,(elnix-compile-strict e env))))
     ('var
-     (let ((r (nixel-compile--lookup (nth 2 e) env)))
+     (let ((r (elnix-compile--lookup (nth 2 e) env)))
        (pcase (car r)
          ('lex (nth 1 r))
          ('global (if (string= (nth 2 e) "__curPos")
-                      (nixel-compile-strict e env)
-                    (nixel-compile--global-value (nth 2 e))))
-         (_ `(nixel--delay ,(nixel-compile-strict e env))))))
-    (_ `(nixel--delay ,(nixel-compile-strict e env)))))
+                      (elnix-compile-strict e env)
+                    (elnix-compile--global-value (nth 2 e))))
+         (_ `(elnix--delay ,(elnix-compile-strict e env))))))
+    (_ `(elnix--delay ,(elnix-compile-strict e env)))))
 
-(defun nixel-compile--global-value (name)
+(defun elnix-compile--global-value (name)
   "A form evaluating to the value of the global NAME."
   (pcase name
     ("true" t)
     ("false" nil)
     ("null" :null)
-    (_ `(nixel-builtin ,(nixel-compile--sym-form name)))))
+    (_ `(elnix-builtin ,(elnix-compile--sym-form name)))))
 
-(defun nixel-compile-strict (e env)
+(defun elnix-compile-strict (e env)
   "A form producing the value of E in ENV."
   (pcase e
     (`(int ,_ ,n) n)
     (`(float ,_ ,f) f)
-    (`(str ,_ ,parts) (nixel-compile--string parts env))
-    (`(path ,pos ,anchor ,parts) (nixel-compile--path pos anchor parts env))
-    (`(var ,pos ,name) (nixel-compile--var pos name env))
+    (`(str ,_ ,parts) (elnix-compile--string parts env))
+    (`(path ,pos ,anchor ,parts) (elnix-compile--path pos anchor parts env))
+    (`(var ,pos ,name) (elnix-compile--var pos name env))
     (`(select ,_ ,subject ,path ,default)
-     (nixel-compile--select subject path default env))
+     (elnix-compile--select subject path default env))
     (`(has ,_ ,subject ,path)
-     `(nixel-has ,(nixel-compile-strict subject env)
-                 ,(nixel-compile--attrpath-form path env)))
+     `(elnix-has ,(elnix-compile-strict subject env)
+                 ,(elnix-compile--attrpath-form path env)))
     (`(lambda ,_ ,param ,formals ,body)
-     (nixel-compile--lambda param formals body env))
-    (`(call . ,_) (nixel-compile--call e env))
+     (elnix-compile--lambda param formals body env))
+    (`(call . ,_) (elnix-compile--call e env))
     (`(list ,_ ,elems)
      (if (null elems)
          []
-       `(vector ,@(mapcar (lambda (x) (nixel-compile-lazy x env)) elems))))
+       `(vector ,@(mapcar (lambda (x) (elnix-compile-lazy x env)) elems))))
     (`(attrs ,pos ,rec ,bindings)
      (if rec
-         (nixel-compile--rec-attrs pos bindings env)
-       (nixel-compile--attrs pos bindings env)))
-    (`(let ,_ ,bindings ,body) (nixel-compile--let bindings body env))
+         (elnix-compile--rec-attrs pos bindings env)
+       (elnix-compile--attrs pos bindings env)))
+    (`(let ,_ ,bindings ,body) (elnix-compile--let bindings body env))
     (`(with ,_ ,scope ,body)
-     (let ((w (nixel-compile--gensym "w")))
-       `(let ((,w (cons ,(nixel-compile-lazy scope env)
-                        ,(nixel-compile--innermost-with env))))
-          ,(nixel-compile-strict body (cons (vector 'with w) env)))))
+     (let ((w (elnix-compile--gensym "w")))
+       `(let ((,w (cons ,(elnix-compile-lazy scope env)
+                        ,(elnix-compile--innermost-with env))))
+          ,(elnix-compile-strict body (cons (vector 'with w) env)))))
     (`(assert ,pos ,c ,body)
-     (let ((lc (nixel-compile--line-col pos)))
-       `(if (nixel--bool ,(nixel-compile-strict c env))
-            ,(nixel-compile-strict body env)
-          (nixel--assert-fail %file ,(car lc) ,(cdr lc)))))
+     (let ((lc (elnix-compile--line-col pos)))
+       `(if (elnix--bool ,(elnix-compile-strict c env))
+            ,(elnix-compile-strict body env)
+          (elnix--assert-fail %file ,(car lc) ,(cdr lc)))))
     (`(if ,_ ,c ,then ,else)
-     `(if (nixel--bool ,(nixel-compile-strict c env))
-          ,(nixel-compile-strict then env)
-        ,(nixel-compile-strict else env)))
-    (`(not ,_ ,x) `(not (nixel--bool ,(nixel-compile-strict x env))))
-    (`(neg ,_ ,x) `(nixel-sub 0 ,(nixel-compile-strict x env)))
-    (`(binop ,_ ,op ,l ,r) (nixel-compile--binop op l r env))
-    (_ (error "nixel: unknown syntax node %S" (car e)))))
+     `(if (elnix--bool ,(elnix-compile-strict c env))
+          ,(elnix-compile-strict then env)
+        ,(elnix-compile-strict else env)))
+    (`(not ,_ ,x) `(not (elnix--bool ,(elnix-compile-strict x env))))
+    (`(neg ,_ ,x) `(elnix-sub 0 ,(elnix-compile-strict x env)))
+    (`(binop ,_ ,op ,l ,r) (elnix-compile--binop op l r env))
+    (_ (error "elnix: unknown syntax node %S" (car e)))))
 
-(defun nixel-compile--var (pos name env)
-  (let ((r (nixel-compile--lookup name env)))
+(defun elnix-compile--var (pos name env)
+  (let ((r (elnix-compile--lookup name env)))
     (pcase (car r)
-      ('lex `(nixel-force ,(nth 1 r)))
-      ('with `(nixel-with-get ,(nth 1 r) ,(nixel-compile--sym-form name)))
+      ('lex `(elnix-force ,(nth 1 r)))
+      ('with `(elnix-with-get ,(nth 1 r) ,(elnix-compile--sym-form name)))
       ('global
        (if (string= name "__curPos")
-           (let ((lc (nixel-compile--line-col pos)))
-             `(nixel--cur-pos %file ,(car lc) ,(cdr lc)))
-         (nixel-compile--global-value name)))
-      (_ (nixel-compile--fail pos "undefined variable '%s'" name)))))
+           (let ((lc (elnix-compile--line-col pos)))
+             `(elnix--cur-pos %file ,(car lc) ,(cdr lc)))
+         (elnix-compile--global-value name)))
+      (_ (elnix-compile--fail pos "undefined variable '%s'" name)))))
 
-(defun nixel-compile--string (parts env)
+(defun elnix-compile--string (parts env)
   (cond
    ((null parts) "")
-   ((cl-every #'stringp parts) (nixel-compile--str-const (apply #'concat parts)))
-   (t `(nixel-interp ,@(mapcar (lambda (p)
-                                 (if (stringp p) (nixel-compile--str-const p)
-                                   (nixel-compile-strict p env)))
+   ((cl-every #'stringp parts) (elnix-compile--str-const (apply #'concat parts)))
+   (t `(elnix-interp ,@(mapcar (lambda (p)
+                                 (if (stringp p) (elnix-compile--str-const p)
+                                   (elnix-compile-strict p env)))
                                parts)))))
 
-(defun nixel-compile--path (_pos anchor parts env)
+(defun elnix-compile--path (_pos anchor parts env)
   (pcase anchor
     ('search
-     `(nixel--find-file ,(car parts)))
+     `(elnix--find-file ,(car parts)))
     (_
      (if (cl-every #'stringp parts)
          (let ((text (apply #'concat parts)))
            (pcase anchor
              ('absolute
-              (nixel-compile--hoist
-               "p" `(nixel--mkpath ,(nixel-canon-path text))))
-             ('home `(nixel--home-path ,text))
-             (_ (nixel-compile--hoist
-                 "p" `(nixel--mkpath (nixel--path-join %dir ,text))))))
-       `(nixel--path-interp %dir ',anchor
+              (elnix-compile--hoist
+               "p" `(elnix--mkpath ,(elnix-canon-path text))))
+             ('home `(elnix--home-path ,text))
+             (_ (elnix-compile--hoist
+                 "p" `(elnix--mkpath (elnix--path-join %dir ,text))))))
+       `(elnix--path-interp %dir ',anchor
                             ,@(mapcar (lambda (p)
                                         (if (stringp p) p
-                                          (nixel-compile-strict p env)))
+                                          (elnix-compile-strict p env)))
                                       parts))))))
 
-(defun nixel-compile--attrname-form (name env)
+(defun elnix-compile--attrname-form (name env)
   "A form evaluating to the symbol of the attribute NAME."
   (pcase name
-    (`(static ,_ ,s) (nixel-compile--sym-form s))
-    (`(dynamic ,_ ,e) `(nixel-dyn-sym ,(nixel-compile-strict e env)))))
+    (`(static ,_ ,s) (elnix-compile--sym-form s))
+    (`(dynamic ,_ ,e) `(elnix-dyn-sym ,(elnix-compile-strict e env)))))
 
-(defun nixel-compile--attrpath-form (path env)
+(defun elnix-compile--attrpath-form (path env)
   "A form evaluating to the list of symbols of the attribute PATH."
   (if (cl-every (lambda (n) (eq (car n) 'static)) path)
-      (list 'quote (mapcar (lambda (n) (intern (nixel--unibyte (nth 2 n))))
+      (list 'quote (mapcar (lambda (n) (intern (elnix--unibyte (nth 2 n))))
                            path))
-    `(list ,@(mapcar (lambda (n) (nixel-compile--attrname-form n env)) path))))
+    `(list ,@(mapcar (lambda (n) (elnix-compile--attrname-form n env)) path))))
 
-(defun nixel-compile--select (subject path default env)
+(defun elnix-compile--select (subject path default env)
   (if default
-      (let ((v (nixel-compile--gensym "v")))
-        `(let ((,v (nixel-sel-or ,(nixel-compile-strict subject env)
-                                 ,(nixel-compile--attrpath-form path env))))
-           (if (eq ,v 'nixel--missing)
-               ,(nixel-compile-strict default env)
+      (let ((v (elnix-compile--gensym "v")))
+        `(let ((,v (elnix-sel-or ,(elnix-compile-strict subject env)
+                                 ,(elnix-compile--attrpath-form path env))))
+           (if (eq ,v 'elnix--missing)
+               ,(elnix-compile-strict default env)
              ,v)))
-    (let ((form (nixel-compile-strict subject env)))
+    (let ((form (elnix-compile-strict subject env)))
       (dolist (n path)
-        (setq form `(nixel-sel ,form ,(nixel-compile--attrname-form n env))))
+        (setq form `(elnix-sel ,form ,(elnix-compile--attrname-form n env))))
       form)))
 
 ;;;; Functions
 
-(defun nixel-compile--lambda (param formals body env)
+(defun elnix-compile--lambda (param formals body env)
   (if (null formals)
-      (let ((sym (nixel-compile--var-sym param)))
+      (let ((sym (elnix-compile--var-sym param)))
         `(lambda (,sym)
-           ,(nixel-compile-strict
+           ,(elnix-compile-strict
              body (cons (vector 'vars (list (cons param sym)) nil) env))))
-    (nixel-compile--formals-lambda param formals body env)))
+    (elnix-compile--formals-lambda param formals body env)))
 
-(defun nixel-compile--formals-lambda (param formals body env)
+(defun elnix-compile--formals-lambda (param formals body env)
   (let* ((entries (car formals))
          (ellipsis (cdr formals))
-         (arg (nixel-compile--gensym "arg"))
-         (set (nixel-compile--gensym "set"))
+         (arg (elnix-compile--gensym "arg"))
+         (set (elnix-compile--gensym "set"))
          (alist (append
-                 (mapcar (lambda (f) (cons (car f) (nixel-compile--var-sym (car f))))
+                 (mapcar (lambda (f) (cons (car f) (elnix-compile--var-sym (car f))))
                          entries)
-                 (and param (list (cons param (nixel-compile--var-sym param))))))
+                 (and param (list (cons param (elnix-compile--var-sym param))))))
          (frame (vector 'vars alist nil))
          (inner (cons frame env))
          (spec (mapcar (lambda (f)
-                         (cons (intern (nixel--unibyte (car f)))
+                         (cons (intern (elnix--unibyte (car f)))
                                (and (nth 2 f) t)))
                        entries))
          ;; Each formal's form, compiled in the function's own scope so
          ;; that a default can name the other formals.
          (inits (mapcar
                  (lambda (f)
-                   (let ((sym-form (nixel-compile--sym-form (car f))))
-                     (list (nixel-compile--var-sym (car f))
+                   (let ((sym-form (elnix-compile--sym-form (car f))))
+                     (list (elnix-compile--var-sym (car f))
                            (if (nth 2 f)
-                               (let ((x (nixel-compile--gensym "x"))
-                                     (default (nixel-compile-lazy (nth 2 f) inner)))
+                               (let ((x (elnix-compile--gensym "x"))
+                                     (default (elnix-compile-lazy (nth 2 f) inner)))
                                  ;; A default that is another formal
                                  ;; would read it before it is assigned.
                                  (when (and (symbolp default) (rassq default alist))
-                                   (setq default `(nixel--delay (nixel-force ,default))))
+                                   (setq default `(elnix--delay (elnix-force ,default))))
                                  `(let ((,x (gethash ,sym-form (aref ,set 1)
-                                                     'nixel--missing)))
-                                    (if (eq ,x 'nixel--missing)
+                                                     'elnix--missing)))
+                                    (if (eq ,x 'elnix--missing)
                                         ,default
                                       ,x)))
                              `(gethash ,sym-form (aref ,set 1))))))
                  entries))
          (recursive (aref frame 2))
-         (param-binding (and param (list (list (nixel-compile--var-sym param) arg))))
-         (body-form (nixel-compile-strict body inner)))
-    `(nixel--mklam
+         (param-binding (and param (list (list (elnix-compile--var-sym param) arg))))
+         (body-form (elnix-compile-strict body inner)))
+    `(elnix--mklam
       (lambda (,arg)
-        (let ((,set (nixel-formals-check ,arg ',spec ,ellipsis)))
+        (let ((,set (elnix-formals-check ,arg ',spec ,ellipsis)))
           ,(if recursive
                `(let ,(append (mapcar #'car param-binding) (mapcar #'car inits))
                   ,@(mapcar (lambda (b) `(setq ,@b)) param-binding)
@@ -342,78 +342,78 @@ Such an expression needs no thunk in a lazy position."
                 ,body-form))))
       ',spec ,ellipsis)))
 
-(defun nixel-compile--builtin-callee (fn env)
+(defun elnix-compile--builtin-callee (fn env)
   "The builtin name FN refers to, when FN is a reference to a builtin."
   (pcase fn
     (`(var ,_ ,name)
-     (and (eq (car (nixel-compile--lookup name env)) 'global)
+     (and (eq (car (elnix-compile--lookup name env)) 'global)
           (if (string-prefix-p "__" name) (substring name 2) name)))
     (`(select ,_ (var ,_ "builtins") ((static ,_ ,name)) nil)
-     (and (eq (car (nixel-compile--lookup "builtins" env)) 'global)
+     (and (eq (car (elnix-compile--lookup "builtins" env)) 'global)
           name))))
 
-(defun nixel-compile--call (e env)
+(defun elnix-compile--call (e env)
   ;; Flatten the curried application f a b c.
   (let ((args nil) (fn e))
     (while (eq (car fn) 'call)
       (push (nth 3 fn) args)
       (setq fn (nth 2 fn)))
-    (let* ((bname (nixel-compile--builtin-callee fn env))
-           (arity (and bname nixel-compile-builtin-arity
-                       (funcall nixel-compile-builtin-arity bname))))
+    (let* ((bname (elnix-compile--builtin-callee fn env))
+           (arity (and bname elnix-compile-builtin-arity
+                       (funcall elnix-compile-builtin-arity bname))))
       (if (and arity (> arity 0) (>= (length args) arity))
-          (let ((form `(,(intern (concat "nixel-b--" bname))
-                        ,@(mapcar (lambda (a) (nixel-compile-lazy a env))
+          (let ((form `(,(intern (concat "elnix-b--" bname))
+                        ,@(mapcar (lambda (a) (elnix-compile-lazy a env))
                                   (cl-subseq args 0 arity)))))
             (dolist (a (nthcdr arity args))
-              (setq form `(nixel-app ,form ,(nixel-compile-lazy a env))))
+              (setq form `(elnix-app ,form ,(elnix-compile-lazy a env))))
             form)
-        (let ((form (nixel-compile-strict fn env)))
+        (let ((form (elnix-compile-strict fn env)))
           (dolist (a args)
-            (setq form `(nixel-app ,form ,(nixel-compile-lazy a env))))
+            (setq form `(elnix-app ,form ,(elnix-compile-lazy a env))))
           form)))))
 
 ;;;; Operators
 
-(defun nixel-compile--binop (op l r env)
-  (let ((sl (lambda () (nixel-compile-strict l env)))
-        (sr (lambda () (nixel-compile-strict r env))))
+(defun elnix-compile--binop (op l r env)
+  (let ((sl (lambda () (elnix-compile-strict l env)))
+        (sr (lambda () (elnix-compile-strict r env))))
     (pcase op
-      ("+" `(nixel-add ,(funcall sl) ,(funcall sr)))
-      ("-" `(nixel-sub ,(funcall sl) ,(funcall sr)))
-      ("*" `(nixel-mul ,(funcall sl) ,(funcall sr)))
-      ("/" `(nixel-div ,(funcall sl) ,(funcall sr)))
-      ("==" `(nixel-eq ,(funcall sl) ,(funcall sr)))
-      ("!=" `(not (nixel-eq ,(funcall sl) ,(funcall sr))))
+      ("+" `(elnix-add ,(funcall sl) ,(funcall sr)))
+      ("-" `(elnix-sub ,(funcall sl) ,(funcall sr)))
+      ("*" `(elnix-mul ,(funcall sl) ,(funcall sr)))
+      ("/" `(elnix-div ,(funcall sl) ,(funcall sr)))
+      ("==" `(elnix-eq ,(funcall sl) ,(funcall sr)))
+      ("!=" `(not (elnix-eq ,(funcall sl) ,(funcall sr))))
       ;; Nix rewrites the comparisons to __lessThan, which fixes the
       ;; order the operands are evaluated in.
-      ("<" `(nixel-less-than ,(funcall sl) ,(funcall sr)))
-      (">" `(nixel-less-than ,(funcall sr) ,(funcall sl)))
-      ("<=" `(not (nixel-less-than ,(funcall sr) ,(funcall sl))))
-      (">=" `(not (nixel-less-than ,(funcall sl) ,(funcall sr))))
-      ("&&" `(and (nixel--bool ,(funcall sl)) (nixel--bool ,(funcall sr))))
-      ("||" `(or (nixel--bool ,(funcall sl)) (nixel--bool ,(funcall sr))))
-      ("->" `(or (not (nixel--bool ,(funcall sl))) (nixel--bool ,(funcall sr))))
-      ("//" `(nixel-update (nixel--check-attrs ,(funcall sl))
-                           (nixel--check-attrs ,(funcall sr))))
-      ("++" `(nixel-concat-lists ,(funcall sl) ,(funcall sr)))
-      ("|>" `(nixel-app ,(funcall sr) ,(nixel-compile-lazy l env)))
-      ("<|" `(nixel-app ,(funcall sl) ,(nixel-compile-lazy r env)))
-      (_ (error "nixel: unknown operator %s" op)))))
+      ("<" `(elnix-less-than ,(funcall sl) ,(funcall sr)))
+      (">" `(elnix-less-than ,(funcall sr) ,(funcall sl)))
+      ("<=" `(not (elnix-less-than ,(funcall sr) ,(funcall sl))))
+      (">=" `(not (elnix-less-than ,(funcall sl) ,(funcall sr))))
+      ("&&" `(and (elnix--bool ,(funcall sl)) (elnix--bool ,(funcall sr))))
+      ("||" `(or (elnix--bool ,(funcall sl)) (elnix--bool ,(funcall sr))))
+      ("->" `(or (not (elnix--bool ,(funcall sl))) (elnix--bool ,(funcall sr))))
+      ("//" `(elnix-update (elnix--check-attrs ,(funcall sl))
+                           (elnix--check-attrs ,(funcall sr))))
+      ("++" `(elnix-concat-lists ,(funcall sl) ,(funcall sr)))
+      ("|>" `(elnix-app ,(funcall sr) ,(elnix-compile-lazy l env)))
+      ("<|" `(elnix-app ,(funcall sl) ,(elnix-compile-lazy r env)))
+      (_ (error "elnix: unknown operator %s" op)))))
 
 ;;;; Bindings
 
-(defun nixel-compile--pos-table (bindings)
+(defun elnix-compile--pos-table (bindings)
   "A hoisted position table for the static names of BINDINGS, or nil."
   (let ((alist nil))
     (dolist (b bindings)
       (when (eq (car (car b)) 'static)
-        (let ((lc (nixel-compile--line-col (nth 1 (car b)))))
-          (push (cons (intern (nixel--unibyte (nth 2 (car b)))) lc) alist))))
+        (let ((lc (elnix-compile--line-col (nth 1 (car b)))))
+          (push (cons (intern (elnix--unibyte (nth 2 (car b)))) lc) alist))))
     (when alist
-      (nixel-compile--hoist "pos" `(vector %file ',(nreverse alist))))))
+      (elnix-compile--hoist "pos" `(vector %file ',(nreverse alist))))))
 
-(defun nixel-compile--group (bindings env inner-env)
+(defun elnix-compile--group (bindings env inner-env)
   "Compile the values of a group of BINDINGS.
 ENV is the scope outside the group, INNER-ENV the scope its values see.
 Return a plist with :froms, a list of (SYMBOL FORM) for the shared
@@ -424,34 +424,34 @@ the static bindings in order, and :dynamic, a list of (NAME-FORM FORM)."
       (pcase-let ((`(,name ,value ,kind) b))
         (let ((form
                (pcase kind
-                 ('inherit (nixel-compile-lazy value env))
+                 ('inherit (elnix-compile-lazy value env))
                  ('inherit-from
                   (let* ((from (nth 2 value))
                          (cell (assq from froms)))
                     (unless cell
-                      (let ((form (nixel-compile-lazy from inner-env)))
+                      (let ((form (elnix-compile-lazy from inner-env)))
                         ;; A source that is a variable is read where it
                         ;; is used: copying it into a temporary would
                         ;; read a recursive binding before it is set.
                         (setq cell (if (symbolp form)
                                        (list from form nil)
-                                     (list from (nixel-compile--gensym "from") form))))
+                                     (list from (elnix-compile--gensym "from") form))))
                       (push cell froms))
-                    `(nixel--delay
-                      (nixel-sel (nixel-force ,(nth 1 cell))
-                                 ,(nixel-compile--sym-form (nth 3 value))))))
-                 (_ (nixel-compile-lazy value inner-env)))))
+                    `(elnix--delay
+                      (elnix-sel (elnix-force ,(nth 1 cell))
+                                 ,(elnix-compile--sym-form (nth 3 value))))))
+                 (_ (elnix-compile-lazy value inner-env)))))
           (if (eq (car name) 'static)
               (push (list (nth 2 name) form kind) values)
-            (push (list `(nixel-dyn-sym-or-skip
-                          ,(nixel-compile-strict (nth 2 name) inner-env))
+            (push (list `(elnix-dyn-sym-or-skip
+                          ,(elnix-compile-strict (nth 2 name) inner-env))
                         form)
                   dynamic)))))
     (list :froms (mapcar #'cdr (cl-remove-if-not (lambda (c) (nth 2 c)) (nreverse froms)))
           :values (nreverse values)
           :dynamic (nreverse dynamic))))
 
-(defun nixel-compile--binding-group (bindings env body-fn &optional force-recursive)
+(defun elnix-compile--binding-group (bindings env body-fn &optional force-recursive)
   "Compile a recursive group of BINDINGS (a let or rec) around a body.
 BODY-FN is called with the inner environment and the compiled group
 and returns the body form.  FORCE-RECURSIVE binds the group's variables
@@ -459,17 +459,17 @@ assignably even when no value refers to another."
   (let* ((names (cl-loop for b in bindings
                          when (eq (car (car b)) 'static)
                          collect (nth 2 (car b))))
-         (alist (mapcar (lambda (n) (cons n (nixel-compile--var-sym n))) names))
+         (alist (mapcar (lambda (n) (cons n (elnix-compile--var-sym n))) names))
          (frame (vector 'vars alist nil))
          (inner (cons frame env))
-         (group (nixel-compile--group bindings env inner))
+         (group (elnix-compile--group bindings env inner))
          (recursive (or force-recursive (aref frame 2)))
          (froms (plist-get group :froms))
          (values (plist-get group :values))
          (body (funcall body-fn inner group)))
     (if (not recursive)
         `(let ,froms
-           (let ,(mapcar (lambda (v) (list (nixel-compile--var-sym (car v))
+           (let ,(mapcar (lambda (v) (list (elnix-compile--var-sym (car v))
                                            (nth 1 v)))
                          values)
              ,body))
@@ -481,98 +481,98 @@ assignably even when no value refers to another."
              (assigns
               (mapcar
                (lambda (v)
-                 (let ((sym (nixel-compile--var-sym (car v)))
+                 (let ((sym (elnix-compile--var-sym (car v)))
                        (form (nth 1 v)))
                    (cond
                     ((eq (nth 2 v) 'inherit)
-                     (let ((tmp (nixel-compile--gensym "outer")))
+                     (let ((tmp (elnix-compile--gensym "outer")))
                        (push (list tmp form) outer-temps)
                        (list sym tmp)))
                     ((and (symbolp form) (rassq form alist))
-                     (list sym `(nixel--delay (nixel-force ,form))))
+                     (list sym `(elnix--delay (elnix-force ,form))))
                     (t (list sym form)))))
                values)))
         `(let ,(nreverse outer-temps)
            (let ,(append (mapcar #'car froms) (mapcar #'car assigns))
              ,@(mapcar (lambda (f) `(setq ,@f)) froms)
-             ,@(nixel-compile--chunked (mapcar (lambda (a) `(setq ,@a)) assigns))
+             ,@(elnix-compile--chunked (mapcar (lambda (a) `(setq ,@a)) assigns))
              ,body))))))
 
-(defconst nixel-compile--chunk-size 200
+(defconst elnix-compile--chunk-size 200
   "The most forms of a set construction compiled into one function.")
 
-(defun nixel-compile--chunked (forms)
-  "FORMS, split into closures of at most `nixel-compile--chunk-size' forms.
+(defun elnix-compile--chunked (forms)
+  "FORMS, split into closures of at most `elnix-compile--chunk-size' forms.
 One byte-compiled function holds at most 65536 constants, and the byte
 compiler slows down on very large functions, so a set of thousands of
 attributes is built by a series of closures, each with constants of its
-own.  `nixel--run' is an ordinary function, which keeps the byte
+own.  `elnix--run' is an ordinary function, which keeps the byte
 optimiser from inlining the closures back."
-  (if (<= (length forms) nixel-compile--chunk-size)
+  (if (<= (length forms) elnix-compile--chunk-size)
       forms
     (let ((out nil))
       (while forms
-        (let ((chunk (cl-subseq forms 0 (min nixel-compile--chunk-size (length forms)))))
-          (setq forms (nthcdr nixel-compile--chunk-size forms))
-          (push `(nixel--run (lambda () ,@chunk)) out)))
+        (let ((chunk (cl-subseq forms 0 (min elnix-compile--chunk-size (length forms)))))
+          (setq forms (nthcdr elnix-compile--chunk-size forms))
+          (push `(elnix--run (lambda () ,@chunk)) out)))
       (nreverse out))))
 
-(defun nixel-compile--build-attrs (pos-table values dynamic value-form-fn)
+(defun elnix-compile--build-attrs (pos-table values dynamic value-form-fn)
   "A form building an attribute set.
 VALUES are (NAME FORM KIND); VALUE-FORM-FN maps one to the form that
 gives its lazy value.  DYNAMIC are (NAME-FORM FORM)."
-  (let ((tbl (nixel-compile--gensym "t")))
+  (let ((tbl (elnix-compile--gensym "t")))
     `(let ((,tbl (make-hash-table :test 'eq :size ,(+ (length values)
                                                       (length dynamic)))))
-       ,@(nixel-compile--chunked
+       ,@(elnix-compile--chunked
           (mapcar (lambda (v)
-                    `(puthash ,(nixel-compile--sym-form (car v))
+                    `(puthash ,(elnix-compile--sym-form (car v))
                               ,(funcall value-form-fn v) ,tbl))
                   values))
-       ,@(mapcar (lambda (d) `(nixel--put-dynamic ,tbl ,(car d) ,(nth 1 d)))
+       ,@(mapcar (lambda (d) `(elnix--put-dynamic ,tbl ,(car d) ,(nth 1 d)))
                  dynamic)
-       (nixel--mkattrs ,tbl ,pos-table))))
+       (elnix--mkattrs ,tbl ,pos-table))))
 
-(defun nixel-compile--attrs (_pos bindings env)
-  (let* ((group (nixel-compile--group bindings env env))
-         (pos-table (nixel-compile--pos-table bindings))
+(defun elnix-compile--attrs (_pos bindings env)
+  (let* ((group (elnix-compile--group bindings env env))
+         (pos-table (elnix-compile--pos-table bindings))
          (froms (plist-get group :froms))
-         (form (nixel-compile--build-attrs
+         (form (elnix-compile--build-attrs
                 pos-table (plist-get group :values) (plist-get group :dynamic)
                 (lambda (v) (nth 1 v)))))
     (if froms `(let ,froms ,form) form)))
 
-(defun nixel-compile--rec-attrs (_pos bindings env)
-  (let ((pos-table (nixel-compile--pos-table bindings))
+(defun elnix-compile--rec-attrs (_pos bindings env)
+  (let ((pos-table (elnix-compile--pos-table bindings))
         (overrides (cl-some (lambda (b) (and (eq (car (car b)) 'static)
                                              (string= (nth 2 (car b)) "__overrides")))
                             bindings)))
-    (nixel-compile--binding-group
+    (elnix-compile--binding-group
      bindings env
      (lambda (_inner group)
-       (let ((build (nixel-compile--build-attrs
+       (let ((build (elnix-compile--build-attrs
                      pos-table (plist-get group :values) (plist-get group :dynamic)
-                     (lambda (v) (nixel-compile--var-sym (car v))))))
+                     (lambda (v) (elnix-compile--var-sym (car v))))))
          (if overrides
-             (nixel-compile--with-overrides (plist-get group :values) build)
+             (elnix-compile--with-overrides (plist-get group :values) build)
            build)))
      overrides)))
 
-(defun nixel-compile--with-overrides (values build)
+(defun elnix-compile--with-overrides (values build)
   "Wrap BUILD, the construction of a rec set, in the `__overrides' rule.
 The legacy rule: the set named `__overrides' is forced when the rec set
 is, and each of its attributes replaces the attribute of the same name,
 for the other attributes' references too, or is added to the set."
-  (let ((ov (nixel-compile--gensym "ov"))
-        (set (nixel-compile--gensym "set"))
-        (k (nixel-compile--gensym "k"))
-        (x (nixel-compile--gensym "x")))
-    `(let ((,ov (nixel-force-attrs $__overrides)))
+  (let ((ov (elnix-compile--gensym "ov"))
+        (set (elnix-compile--gensym "set"))
+        (k (elnix-compile--gensym "k"))
+        (x (elnix-compile--gensym "x")))
+    `(let ((,ov (elnix-force-attrs $__overrides)))
        (maphash (lambda (,k ,x)
                   (cond
                    ,@(mapcar (lambda (v)
-                               `((eq ,k ,(nixel-compile--sym-form (car v)))
-                                 (setq ,(nixel-compile--var-sym (car v)) ,x)))
+                               `((eq ,k ,(elnix-compile--sym-form (car v)))
+                                 (setq ,(elnix-compile--var-sym (car v)) ,x)))
                              values)))
                 (aref ,ov 1))
        (let ((,set ,build))
@@ -580,28 +580,28 @@ for the other attributes' references too, or is added to the set."
          (aset ,set 3 nil)
          ,set))))
 
-(defun nixel-compile--let (bindings body env)
-  (nixel-compile--binding-group
+(defun elnix-compile--let (bindings body env)
+  (elnix-compile--binding-group
    bindings env
-   (lambda (inner _group) (nixel-compile-strict body inner))))
+   (lambda (inner _group) (elnix-compile-strict body inner))))
 
 ;;;; Modules
 
-(defun nixel-compile-module (ast line-starts &optional file)
+(defun elnix-compile-module (ast line-starts &optional file)
   "Compile AST, with its LINE-STARTS table, to a module form.
 The form evaluates to a function of the source directory and the
 source file name that returns the module's value.  FILE names the
 source in compile errors."
-  (let* ((nixel-compile--line-starts line-starts)
-         (nixel-compile--hoisted nil)
-         (nixel-compile--counter 0)
-         (nixel-compile--file file)
-         (body (nixel-compile-strict ast nil)))
+  (let* ((elnix-compile--line-starts line-starts)
+         (elnix-compile--hoisted nil)
+         (elnix-compile--counter 0)
+         (elnix-compile--file file)
+         (body (elnix-compile-strict ast nil)))
     `(lambda (%dir %file)
        (ignore %dir %file)
-       (let* ,(reverse nixel-compile--hoisted)
+       (let* ,(reverse elnix-compile--hoisted)
          ,body))))
 
-(provide 'nixel-compile)
+(provide 'elnix-compile)
 
-;;; nixel-compile.el ends here
+;;; elnix-compile.el ends here

@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
+#
+# The elnix command line: Emacs in batch mode running elnix-cli-main.
+# ELNIX_EMACS names the Emacs to run; the default is the first on PATH.
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+exec "${ELNIX_EMACS:-emacs}" --batch -Q --eval '(setq load-prefer-newer t)' \
+  -L "$here/lisp" -l elnix-cli -f elnix-cli-main "$@"

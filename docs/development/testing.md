@@ -1,14 +1,14 @@
-# nixel: testing
+# elnix: testing
 
 Three levels, from a single builtin to all of nixpkgs. Each compares
-nixel with Nix 2.34 itself.
+elnix with Nix 2.34 itself.
 
 ## Unit tests (ERT)
 
 `test/*-test.el` hold ERT tests, run with:
 
 ```zsh
-emacs --batch -Q -L lisp -l test/nixel-toml-test.el -f ert-run-tests-batch-and-exit
+emacs --batch -Q -L lisp -l test/elnix-toml-test.el -f ert-run-tests-batch-and-exit
 ```
 
 ## The language: nix-conformance
@@ -20,22 +20,22 @@ protocol for the `eval`, `eval-xml` and `check` operations and exits 3
 (skip) for the others. From a checkout of nix-conformance:
 
 ```zsh
-./run /path/to/nixel/test/conformance-adapter lang
+./run /path/to/elnix/test/conformance-adapter lang
 ```
 
-The adapter runs `bin/nixel`, which finds Emacs through `NIXEL_EMACS` or
-`PATH` and caches compiled modules in `NIXEL_CACHE_DIR`.
+The adapter runs `bin/elnix`, which finds Emacs through `ELNIX_EMACS` or
+`PATH` and caches compiled modules in `ELNIX_CACHE_DIR`.
 
 ## nixpkgs: drv-paths against nix-eval-jobs
 
-`nixel drv-paths FILE` walks the set FILE evaluates to as
+`elnix drv-paths FILE` walks the set FILE evaluates to as
 `nix-eval-jobs` does (every top-level attribute, then sets with
 `recurseForDerivations = true`) and prints one JSON line per attribute:
 `attr`, then `drvPath` or `error`, then `ms`, the milliseconds since its
 top-level attribute began. `--shard K/N` takes every Nth top-level
 attribute starting with the Kth, so N processes cover the set together.
 
-Running `nix-eval-jobs` and N nixel shards over the same file and
+Running `nix-eval-jobs` and N elnix shards over the same file and
 joining the two outputs on `attr` sorts every attribute into one of:
 the same drvPath, a different drvPath, an error on one side only, or an
 error on both. The bar is that only the first and the last occur.
@@ -44,5 +44,5 @@ Compile the tree first, so that the shards do not compile the same
 files in parallel:
 
 ```zsh
-nixel compile-tree /path/to/nixpkgs 0/1
+elnix compile-tree /path/to/nixpkgs 0/1
 ```

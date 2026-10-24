@@ -1,4 +1,4 @@
-# nixel: tech stack
+# elnix: tech stack
 
 Emacs Lisp on Emacs 31 or later, with lexical binding throughout. No
 packages outside Emacs itself.
@@ -7,10 +7,10 @@ packages outside Emacs itself.
 
 | Stage | File | What it does |
 |---|---|---|
-| Parse | `lisp/nixel-parse.el` | Nix source in a unibyte buffer to a syntax tree of plain lists |
-| Compile | `lisp/nixel-compile.el` | Syntax tree to one Lisp form per file: a function of the file's directory and name |
-| Cache | `lisp/nixel.el` | The form byte-compiled to `NIXEL_CACHE_DIR`, keyed by the SHA-256 of the compiler and the source |
-| Run | `lisp/nixel-runtime.el`, `lisp/nixel-builtins.el` | The values and operations compiled code calls |
+| Parse | `lisp/elnix-parse.el` | Nix source in a unibyte buffer to a syntax tree of plain lists |
+| Compile | `lisp/elnix-compile.el` | Syntax tree to one Lisp form per file: a function of the file's directory and name |
+| Cache | `lisp/elnix.el` | The form byte-compiled to `ELNIX_CACHE_DIR`, keyed by the SHA-256 of the compiler and the source |
+| Run | `lisp/elnix-runtime.el`, `lisp/elnix-builtins.el` | The values and operations compiled code calls |
 
 ## Values
 
@@ -20,12 +20,12 @@ packages outside Emacs itself.
 | float | float |
 | bool | `t` and `nil` |
 | null | `:null` |
-| string | unibyte string, or a `nixel--cstr` record when it has a context |
-| path | `nixel--path` record |
+| string | unibyte string, or a `elnix--cstr` record when it has a context |
+| path | `elnix--path` record |
 | list | vector |
-| attrs | `nixel--attrs` record around an `eq` hash table keyed by interned symbols |
-| lambda | closure of one argument; `nixel--lam` record when it has formals |
-| primop | `nixel--primop` record holding the function, arity and arguments so far |
+| attrs | `elnix--attrs` record around an `eq` hash table keyed by interned symbols |
+| lambda | closure of one argument; `elnix--lam` record when it has formals |
+| primop | `elnix--primop` record holding the function, arity and arguments so far |
 
 A thunk is a cons cell, because no value is one: `consp` is a bytecode
 opcode, so forcing a value that is not a thunk costs one type check.
@@ -42,8 +42,8 @@ in `string-to-unibyte`.
 
 - **A thunk that fails is put back.** Nix resets a thunk whose
   evaluation throws, so a later force throws the same error rather than
-  reporting infinite recursion. nixel keeps the stack of thunks being
-  forced in `nixel--forcing`, and the handlers that catch errors
+  reporting infinite recursion. elnix keeps the stack of thunks being
+  forced in `elnix--forcing`, and the handlers that catch errors
   (`tryEval`, the per-attribute loop of `drv-paths`) restore the thunks
   above their own depth. This costs a cons per force instead of a
   `condition-case`, which would cost a `setjmp`.
@@ -54,10 +54,12 @@ in `string-to-unibyte`.
 - **Globals win over `with`.** The builtins are lexical bindings of the
   outermost scope in Nix, so `with { map = 1; }; map` is still
   `builtins.map`.
-- **`posix-string-match` is not used.** Emacs 31.1 aborts in it on
-  patterns such as `(a|ab)(c|bcd)`. `split` finds the longest match at
-  the leftmost start by anchored matching instead; see the commentary of
-  `lisp/nixel-regex.el`.
+- **Regular expressions are parsed, then run by Emacs.** The parser
+  rejects what libstdc++ rejects and writes Emacs syntax. libstdc++ and
+  Emacs both report the first match a depth-first search finds, so
+  `string-match` gives the captures Nix gives, for `split` as well as
+  `match`. (`posix-string-match` would not: it prefers longer matches,
+  and Emacs 31.1 aborts in it on patterns such as `(a|ab)(c|bcd)`.)
 - **The `derivation` builtin is Nix code** (`corepkgs/derivation.nix`),
   as it is in Nix. `<nix/fetchurl.nix>` resolves to
   `corepkgs/fetchurl.nix`.
@@ -68,7 +70,7 @@ in `string-to-unibyte`.
   evaluations of the same `x: x` are one value and `[ (x: x) ] == [ (x:
   x) ]` is true; in Nix it is false.
 - Nix stores lists of up to two elements inside each value, so a copy of
-  such a list is a new list to the printer's `«repeated»` check; nixel
+  such a list is a new list to the printer's `«repeated»` check; elnix
   prints `«repeated»` one level earlier in those cases.
 - `parseFlakeRef`, `flakeRefToString` and BLAKE3 hashes are not
   implemented.

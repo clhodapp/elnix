@@ -1,8 +1,8 @@
-# nixel: commands
+# elnix: commands
 
-Run from the project directory. `bin/nixel` runs `emacs --batch`; set
-`NIXEL_EMACS` to use an Emacs that is not first on `PATH`, and
-`NIXEL_CACHE_DIR` to move the module cache from `~/.cache/nixel`.
+Run from the project directory. `bin/elnix` runs `emacs --batch`; set
+`ELNIX_EMACS` to use an Emacs that is not first on `PATH`, and
+`ELNIX_CACHE_DIR` to move the module cache from `~/.cache/elnix`.
 
 ## Build
 
@@ -15,10 +15,10 @@ emacs --batch -Q -L lisp -f batch-byte-compile lisp/*.el
 ## Evaluate
 
 ```zsh
-bin/nixel eval -E '1 + 2'
-bin/nixel eval --strict file.nix
-bin/nixel eval --json -A hello.name /path/to/nixpkgs
-bin/nixel drv-path -A hello /path/to/nixpkgs
+bin/elnix eval -E '1 + 2'
+bin/elnix eval --strict file.nix
+bin/elnix eval --json -A hello.name /path/to/nixpkgs
+bin/elnix drv-path -A hello /path/to/nixpkgs
 ```
 
 `eval` takes the `nix-instantiate --eval` flags: `--strict`, `--json`,
@@ -29,7 +29,7 @@ bin/nixel drv-path -A hello /path/to/nixpkgs
 ## Inspect the compiled Lisp
 
 ```zsh
-bin/nixel compile file.nix
+bin/elnix compile file.nix
 ```
 
 prints the Lisp form a Nix file compiles to.
@@ -37,8 +37,8 @@ prints the Lisp form a Nix file compiles to.
 ## Compare with Nix
 
 ```zsh
-bin/nixel drv-paths --shard 0/24 pkgs.nix
-bin/nixel compile-tree /path/to/nixpkgs 0/24
+bin/elnix drv-paths --shard 0/24 pkgs.nix
+bin/elnix compile-tree /path/to/nixpkgs 0/24
 ```
 
 See [testing.md](testing.md).

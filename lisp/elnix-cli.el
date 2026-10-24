@@ -48,10 +48,10 @@
   "Call V with AUTO-ARGS as nix-instantiate's autoCallFunction does."
   (let ((f (elnix-force v)))
     (cond
+     ;; A functor is applied to its set, and its result called in turn.
      ((and (elnix--attrs-p f)
            (not (eq (elnix--attr f '__functor) 'elnix--missing)))
-      (let ((inner (elnix-force (elnix-app (elnix--attr f '__functor) f))))
-        (elnix-cli--auto-call-lam inner auto-args f)))
+      (elnix-cli--auto-call (elnix-app (elnix--attr f '__functor) f) auto-args))
      (t (elnix-cli--auto-call-lam f auto-args nil)))))
 
 (defun elnix-cli--auto-call-lam (f auto-args functor-self)
@@ -179,11 +179,17 @@
 While a split set is walked, a child of it is evaluated only when this
 returns non-nil, so that the shards share the children of a large set.")
 
-(defun elnix-cli--walk-jobs (v path emit)
+(defvar elnix-cli--split-paths nil
+  "The dotted paths of the sets whose children the shards share.
+A set named here is walked by every shard; ownership is decided at its
+children that are not themselves named here.")
+
+(defun elnix-cli--walk-jobs (v path emit &optional ancestors)
   "Report the derivations under V at the attribute PATH through EMIT.
 Like nix-eval-jobs: a derivation is a job; a set below the top that has
-recurseForDerivations = true is walked; anything else is skipped.  An
-error stops only the attribute it happens in."
+recurseForDerivations = true is walked; a set that is one of its
+ANCESTORS is a cycle; anything else is skipped.  An error stops only
+the attribute it happens in."
   (elnix--catching
    ((error err (funcall emit path (list (cons "error" (elnix-json-quote
                                                        (elnix-cli--error-text err)))))))
@@ -192,21 +198,29 @@ error stops only the attribute it happens in."
    (let ((x (elnix-cli--auto-call v nil)))
      (when (elnix--attrs-p x)
        (cond
+        ((memq x ancestors)
+         (funcall emit path (list (cons "error" (elnix-json-quote
+                                                 "attribute set contains itself (cycle)")))))
         ((elnix--is-derivation x)
          (let ((drv (elnix-force-string-text (elnix--attr x 'drvPath))))
            (funcall emit path (list (cons "drvPath" (elnix-json-quote drv))))))
         ((or (null path)
              (let ((r (elnix--attr x 'recurseForDerivations)))
                (and (not (eq r 'elnix--missing)) (eq (elnix-force r) t))))
-         (let ((keys (append (elnix-attr-keys x) nil)))
+         (let ((keys (append (elnix-attr-keys x) nil))
+               (here (mapconcat #'identity path "."))
+               (above (cons x ancestors)))
            (dolist (k keys)
-             (let ((child (append path (list (symbol-name k)))))
+             (let* ((child (append path (list (symbol-name k))))
+                    (child-text (concat here "." (symbol-name k))))
                ;; Ownership is decided at the children of a split set;
                ;; everything below a child belongs to its owner.
                (unless (or (eq k 'recurseForDerivations)
-                           (and elnix-cli--owns (= (length child) 2)
+                           (and elnix-cli--owns
+                                (member here elnix-cli--split-paths)
+                                (not (member child-text elnix-cli--split-paths))
                                 (not (funcall elnix-cli--owns child))))
-                 (elnix-cli--walk-jobs (elnix--attr x k) child emit)))))))))))
+                 (elnix-cli--walk-jobs (elnix--attr x k) child emit above)))))))))))
 
 (defun elnix-cli--path-hash (text m)
   "A number below M chosen by the MD5 of TEXT, stable across processes."
@@ -251,6 +265,7 @@ only the children whose attribute path hashes to it."
     (let* ((root (elnix-force (if expr (elnix-eval-string expr default-directory "«string»")
                                 (elnix-eval-file file))))
            (keys (append (elnix-attr-keys root) nil))
+           (elnix-cli--split-paths split)
            (i 0))
       (dolist (k keys)
         (let* ((splitting (and shard (member (symbol-name k) split)))
@@ -282,7 +297,8 @@ only the children whose attribute path hashes to it."
                   ;; and the resident memory of the process in kB.
                   (list (cons "ms" (number-to-string
                                     (round (* 1000 (- (float-time) start)))))
-                        (cons "rss" (number-to-string (elnix-cli--rss))))))))))))
+                        (cons "rss" (number-to-string (elnix-cli--rss))))))))
+             (list root)))))
         (setq i (1+ i))))
     ;; The peak resident memory of this process, for sizing shards.
     (when (file-readable-p "/proc/self/status")

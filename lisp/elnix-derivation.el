@@ -287,10 +287,16 @@ sorted."
                                  ("recursive" 'recursive)
                                  ("nar" 'recursive)
                                  (m (elnix-fail "invalid value '%s' for 'outputHashMode' attribute" m))))
-                       (parsed (elnix-store-parse-hash
-                                output-hash
-                                (and output-hash-algo (> (length output-hash-algo) 0)
-                                     output-hash-algo)))
+                       (algo-name (and output-hash-algo (> (length output-hash-algo) 0)
+                                       output-hash-algo))
+                       ;; Nix takes an empty outputHash as a hash of zeros
+                       ;; of the algorithm, with a warning.
+                       (parsed (if (and (string= output-hash "") algo-name)
+                                   (cons algo-name
+                                         (make-string (cdr (assoc algo-name
+                                                                  elnix-store--hash-sizes))
+                                                      0))
+                                 (elnix-store-parse-hash output-hash algo-name)))
                        (algo (car parsed))
                        (bytes (cdr parsed))
                        (out-path (elnix-store-fixed-path drv-name method algo bytes)))
